@@ -14,7 +14,7 @@ import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(override=True)
 
 app = FastAPI(title="Agentic Work Intake & Execution Prototype")
 
@@ -218,6 +218,9 @@ Automation Agent
     if recipient_email and smtp_config and smtp_config.get("username") and smtp_config.get("password"):
         log_event(request_id, "INFO", f"Triggering real-time email dispatch to {recipient_email}...")
         sent, message = await asyncio.to_thread(send_real_email_sync, request_id, recipient_email, f"Follow-up regarding {topic}", draft, smtp_config)
+        if not sent:
+            log_event(request_id, "ERROR", f"Real-time email dispatch failed: {message}")
+            raise ValueError(message)
         draft += f"\n\n--- REAL-TIME DISPATCH STATUS ---\n{message}"
     else:
         log_event(request_id, "WARN", "SMTP credentials or recipient email not configured. Real-time email dispatch bypassed (Draft generated only).")
@@ -335,7 +338,7 @@ def get_mock_ai_response(text: str) -> InterpretationSchema:
     text_lower = text.lower()
     
     # SCENARIO 1: Routine Business Work
-    if "partner discussion" in text_lower or "summarize a partner" in text_lower or "thank-you email" in text_lower:
+    if "partner discussion" in text_lower or "summarize a partner" in text_lower:
         return InterpretationSchema(
             task_title="Partner Meeting Summary & Follow-Up",
             summary="Review and summarize the partner discussion details, extract action items, draft a professional thank-you email, and configure a follow-up reminder in 7 days.",
@@ -532,7 +535,8 @@ UNSTRUCTURED INPUT:
 ---
 
 Tools description:
-1. `draft_communication` (args: recipient_name: str, topic: str, context: str) -> Drafts a template message. Use 'human_review' route.
+1. `draft_communication` (args: recipient_name: str, recipient_email: str, topic: str, context: str) -> Drafts a template message. Use 'human_review' route.
+   Make sure you extract the recipient's email address if mentioned in the input text and place it in the `recipient_email` tool argument. Generate realistic, detailed, context-aware message content in the `context` argument.
 2. `bounded_website_check` (args: url: str) -> Runs basic audit scrape on a URL. Use 'automatic' route.
 3. `create_task_record` (args: title: str, content: str) -> Persists markdown project file. Route can be 'automatic' or 'human_review'.
 4. `set_reminder` (args: topic: str, delay_days: int) -> Sets db alert reminder. Use 'automatic' route.
@@ -545,15 +549,75 @@ If crucial details like names, dates, or documents are missing, mark the action 
             from google import genai
             from google.genai import types
             client = genai.Client(api_key=api_key)
+            
+            # Define manual OpenAPI schema to ensure structural validity
+            # without triggering developer key additionalProperties limitations
+            schema = {
+                "type": "object",
+                "properties": {
+                    "task_title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "priority": {"type": "string"},
+                    "deadline": {"type": "string"},
+                    "missing_information": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "what_could_be_automated": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "what_requires_human_confirmation": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "action_items": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "title": {"type": "string"},
+                                "description": {"type": "string"},
+                                "route": {"type": "string"},
+                                "tool_name": {"type": "string"},
+                                "tool_args": {
+                                    "type": "object",
+                                    "properties": {
+                                        "recipient_name": {"type": "string"},
+                                        "recipient_email": {"type": "string"},
+                                        "topic": {"type": "string"},
+                                        "context": {"type": "string"},
+                                        "url": {"type": "string"},
+                                        "title": {"type": "string"},
+                                        "content": {"type": "string"},
+                                        "delay_days": {"type": "integer"}
+                                    }
+                                },
+                                "reason": {"type": "string"}
+                            },
+                            "required": ["title", "description", "route", "reason"]
+                        }
+                    }
+                },
+                "required": ["task_title", "summary", "priority", "deadline", "action_items"]
+            }
+            
             response = client.models.generate_content(
-                model='gemini-2.5-flash',
+                model='gemini-3.5-flash',
                 contents=prompt,
                 config=types.GenerateContentConfig(
                     response_mime_type="application/json",
-                    response_schema=InterpretationSchema,
+                    response_schema=schema,
                 ),
             )
-            data = json.loads(response.text)
+            # Cleanup in case there are markdown JSON fences
+            text_response = response.text.strip()
+            if text_response.startswith("```json"):
+                text_response = text_response.split("```json")[1].split("```")[0].strip()
+            elif text_response.startswith("```"):
+                text_response = text_response.split("```")[1].split("```")[0].strip()
+                
+            data = json.loads(text_response)
             return InterpretationSchema(**data)
         except Exception as e:
             raise RuntimeError(f"Gemini API failure: {str(e)}")
@@ -604,15 +668,30 @@ async def post_intake(
     
     # 2. Get Structured Interpretation (Real LLM or Dynamic Mock)
     interpretation = None
-    if use_mock or not api_key:
-        if not api_key and not use_mock:
-            log_event(request_id, "WARN", "No API key provided. Falling back to Demo/Mock Mode automatically.")
+    
+    server_gemini_key = os.environ.get("GEMINI_API_KEY")
+    server_openai_key = os.environ.get("OPENAI_API_KEY")
+    effective_api_key = server_gemini_key or server_openai_key or api_key
+    effective_api_type = api_type
+    
+    if server_gemini_key:
+        effective_api_type = "gemini"
+    elif server_openai_key:
+        effective_api_type = "openai"
+
+    if effective_api_key:
+        effective_api_key = effective_api_key.strip().strip("'").strip('"')
+
+    if use_mock or not effective_api_key:
+        if not effective_api_key and not use_mock:
+            log_event(request_id, "WARN", "No API key provided or configured on server. Falling back to Demo/Mock Mode.")
         log_event(request_id, "INFO", "Using Mock parser for analysis.")
         interpretation = get_mock_ai_response(text)
     else:
-        log_event(request_id, "INFO", f"Calling real LLM ({api_type}) for analysis.")
+        preview = f"{effective_api_key[:5]}...{effective_api_key[-5:]}" if len(effective_api_key) > 10 else "too-short"
+        log_event(request_id, "INFO", f"Calling real LLM ({effective_api_type}) using key [len: {len(effective_api_key)}, preview: {preview}]")
         try:
-            interpretation = call_real_llm(text, api_type, api_key)
+            interpretation = call_real_llm(text, effective_api_type, effective_api_key)
         except Exception as e:
             log_event(request_id, "ERROR", f"LLM execution error: {str(e)}. Falling back to Mock parser.")
             interpretation = get_mock_ai_response(text)

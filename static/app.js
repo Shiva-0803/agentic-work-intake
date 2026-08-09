@@ -2,6 +2,7 @@
 let currentRequestId = null;
 let activeRequestInterval = null;
 let editingActionId = null;
+let currentActions = [];
 
 // DOM Elements
 const requestList = document.getElementById("request-list");
@@ -132,6 +133,9 @@ btnSubmit.addEventListener("click", async () => {
     const smtpPort = document.getElementById("smtp-port").value.trim();
     const smtpUser = document.getElementById("smtp-user").value.trim();
     const smtpPass = document.getElementById("smtp-pass").value.trim();
+    
+    // Persist SMTP configurations locally in browser
+    saveSMTPSettings();
     
     const smtp_config = smtpUser && smtpPass ? {
         host: smtpHost || "smtp.gmail.com",
@@ -307,11 +311,12 @@ function updateLogsDisplay(logs) {
 }
 
 function updateActionItemsList(actions) {
+    currentActions = actions;
     const container = document.getElementById("action-items-container");
     container.innerHTML = "";
     
     if (actions.length === 0) {
-        container.innerHTML = '<div class="no-history">No planned actions generated.</div>';
+        container.innerHTML = '<div class="no-actions">No action items generated for this request.</div>';
         return;
     }
     
@@ -320,12 +325,11 @@ function updateActionItemsList(actions) {
         card.className = "action-card";
         
         let controlsHtml = "";
-        // Human-in-the-loop triggers
-        if (action.status === "waiting_for_approval" && action.route === "human_review") {
+        if (action.status === "waiting_for_approval") {
             controlsHtml = `
                 <div class="action-controls">
                     <button class="btn btn-sm btn-approve" onclick="approveAction(${action.id})"><i class="fa-solid fa-check"></i> Approve & Run</button>
-                    <button class="btn btn-sm btn-edit" onclick="openEditModal(${action.id}, '${action.tool_name}', ${escapeJson(action.tool_args)})"><i class="fa-solid fa-pen-to-square"></i> Edit Params</button>
+                    <button class="btn btn-sm btn-edit" onclick="openEditModal(${action.id})"><i class="fa-solid fa-pen-to-square"></i> Edit Params</button>
                     <button class="btn btn-sm btn-reject" onclick="rejectAction(${action.id})"><i class="fa-solid fa-xmark"></i> Reject</button>
                 </div>
             `;
@@ -451,9 +455,18 @@ async function rejectAction(actionId) {
 // ---------------------------------------------------------
 // Dynamic Parameter Edit Modal
 // ---------------------------------------------------------
-function openEditModal(actionId, toolName, currentArgs) {
+function openEditModal(actionId) {
+    const action = currentActions.find(a => a.id === actionId);
+    if (!action) {
+        alert("Action not found.");
+        return;
+    }
+    
     editingActionId = actionId;
     editParamsForm.innerHTML = "";
+    
+    const toolName = action.tool_name;
+    const currentArgs = typeof action.tool_args === "string" ? JSON.parse(action.tool_args) : (action.tool_args || {});
     
     // Inject form inputs based on the tool
     if (toolName === "draft_communication") {
@@ -530,6 +543,9 @@ btnSaveEdit.addEventListener("click", async (e) => {
     addConsoleLog("USER", `Saved parameter changes for Action #${actionId} and authorized execution.`, "success");
     closeEditModal();
     
+    // Save SMTP configurations locally in browser
+    saveSMTPSettings();
+    
     const clientConfig = getClientConfig();
     try {
         const response = await fetch(`/api/actions/${actionId}/edit`, {
@@ -558,8 +574,36 @@ function toggleRawText() {
 }
 
 // ---------------------------------------------------------
+// SMTP LocalStorage Helpers
+// ---------------------------------------------------------
+function loadSMTPSettings() {
+    const host = localStorage.getItem("smtp_host");
+    const port = localStorage.getItem("smtp_port");
+    const user = localStorage.getItem("smtp_user");
+    const pass = localStorage.getItem("smtp_pass");
+    
+    if (host) document.getElementById("smtp-host").value = host;
+    if (port) document.getElementById("smtp-port").value = port;
+    if (user) document.getElementById("smtp-user").value = user;
+    if (pass) document.getElementById("smtp-pass").value = pass;
+}
+
+function saveSMTPSettings() {
+    localStorage.setItem("smtp_host", document.getElementById("smtp-host").value.trim());
+    localStorage.setItem("smtp_port", document.getElementById("smtp-port").value.trim());
+    localStorage.setItem("smtp_user", document.getElementById("smtp-user").value.trim());
+    localStorage.setItem("smtp_pass", document.getElementById("smtp-pass").value.trim());
+}
+
+// ---------------------------------------------------------
 // Initial Load
 // ---------------------------------------------------------
 window.addEventListener("DOMContentLoaded", () => {
+    // Override browser form persistence to ensure Real LLM is active
+    modeSelect.value = "real";
+    
+    // Auto-load SMTP credentials from browser storage
+    loadSMTPSettings();
+    
     fetchRequestHistory();
 });
