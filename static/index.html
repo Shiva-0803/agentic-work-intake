@@ -1,0 +1,206 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Agentic Work Intake & Execution Console</title>
+    <!-- Google Fonts: Outfit -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="static/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Sidebar: Ingestion History -->
+        <aside class="sidebar">
+            <div class="sidebar-header">
+                <div class="logo">
+                    <i class="fa-solid fa-microchip-ai"></i>
+                    <span>Antigravity Intake</span>
+                </div>
+            </div>
+            
+            <div class="history-section">
+                <h3><i class="fa-solid fa-clock-rotate-left"></i> Request History</h3>
+                <div id="request-list" class="request-list">
+                    <!-- Loaded dynamically -->
+                    <div class="no-history">No intake requests yet.</div>
+                </div>
+            </div>
+        </aside>
+
+        <!-- Main Workspace -->
+        <main class="main-content">
+            <!-- Header with settings -->
+            <header class="top-bar">
+                <h1>Work Intake & Execution Dashboard</h1>
+                
+                <div class="settings-panel">
+                    <button id="settings-toggle" class="btn-icon" title="API Configuration">
+                        <i class="fa-solid fa-gears"></i>
+                    </button>
+                    
+                    <div id="config-dropdown" class="config-dropdown hidden">
+                        <h4>AI Engine Config</h4>
+                        <div class="form-group">
+                            <label for="mode-select">Mode:</label>
+                            <select id="mode-select">
+                                <option value="mock">Demo/Simulation Mode (No Key)</option>
+                                <option value="real">Real LLM API (Server Config)</option>
+                            </select>
+                        </div>
+                        
+                        <div id="real-llm-settings" style="display: none;">
+                            <div class="form-group">
+                                <label for="api-type">API Type:</label>
+                                <select id="api-type">
+                                    <option value="gemini">Google Gemini (Default)</option>
+                                    <option value="openai">OpenAI</option>
+                                </select>
+                            </div>
+                            <div class="form-group">
+                                <label for="api-key">API Key:</label>
+                                <input type="password" id="api-key" value="">
+                            </div>
+                        </div>
+
+                        <h4>Real-Time Email (SMTP)</h4>
+                        <div class="form-group">
+                            <label for="smtp-host">SMTP Host:</label>
+                            <input type="text" id="smtp-host" placeholder="smtp.gmail.com" value="smtp.gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="smtp-port">SMTP Port:</label>
+                            <input type="number" id="smtp-port" placeholder="587" value="587">
+                        </div>
+                        <div class="form-group">
+                            <label for="smtp-user">SMTP Username:</label>
+                            <input type="email" id="smtp-user" placeholder="user@gmail.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="smtp-pass">App Password:</label>
+                            <input type="password" id="smtp-pass" placeholder="App password">
+                        </div>
+
+                        <div class="config-tip">
+                            <i class="fa-solid fa-circle-info"></i> Credentials are kept in browser memory.
+                        </div>
+                    </div>
+                </div>
+            </header>
+
+            <div class="workspace-grid">
+                <!-- Left Panel: Submission and Extraction Info -->
+                <div class="left-panel">
+                    <!-- Submission Box -->
+                    <section class="glass-card intake-card">
+                        <h2><i class="fa-solid fa-file-import"></i> Unstructured Text Intake</h2>
+                        <p class="subtitle">Submit email contents, meeting minutes, Slack chats, or raw tasks to synthesize workflows.</p>
+                        
+                        <textarea id="intake-text" placeholder="Type or paste unstructured text here..."></textarea>
+                        
+                        <div class="presets-row">
+                            <span class="preset-label">Test Scenarios:</span>
+                            <button class="btn btn-preset" onclick="loadScenario(1)">Scenario 1 (Routine)</button>
+                            <button class="btn btn-preset" onclick="loadScenario(2)">Scenario 2 (Hedamo Audit)</button>
+                            <button class="btn btn-preset" onclick="loadScenario(3)">Scenario 3 (Ambiguous)</button>
+                        </div>
+                        
+                        <button id="btn-submit" class="btn btn-primary btn-glow">
+                            <i class="fa-solid fa-wand-magic-sparkles"></i> Analyze & Plan Workflow
+                        </button>
+                    </section>
+
+                    <!-- Active Request Detail / Structured View -->
+                    <section id="detail-card" class="glass-card detail-card hidden">
+                        <div class="detail-header">
+                            <h2 id="detail-title">Task Title</h2>
+                            <div class="badge-row">
+                                <span id="badge-priority" class="badge">Priority</span>
+                                <span id="badge-deadline" class="badge">Deadline</span>
+                                <span id="badge-status" class="badge">Status</span>
+                            </div>
+                        </div>
+                        
+                        <div class="detail-body">
+                            <div class="info-block">
+                                <h3><i class="fa-solid fa-align-left"></i> Summary</h3>
+                                <p id="detail-summary">Summary content...</p>
+                            </div>
+
+                            <div id="missing-info-block" class="info-block warning-block hidden">
+                                <h3><i class="fa-solid fa-triangle-exclamation"></i> Critical Missing Information</h3>
+                                <ul id="missing-info-list"></ul>
+                            </div>
+
+                            <div class="analysis-grid">
+                                <div class="analysis-col">
+                                    <h4><i class="fa-solid fa-bolt"></i> Automatable Actions</h4>
+                                    <ul id="automation-list"></ul>
+                                </div>
+                                <div class="analysis-col">
+                                    <h4><i class="fa-solid fa-user-shield"></i> Requires Confirmation</h4>
+                                    <ul id="confirmation-list"></ul>
+                                </div>
+                            </div>
+                            
+                            <div class="raw-text-dropdown">
+                                <button class="btn-text-toggle" onclick="toggleRawText()">
+                                    <span>View Original Request</span> <i class="fa-solid fa-chevron-down"></i>
+                                </button>
+                                <pre id="raw-text-content" class="hidden"></pre>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+
+                <!-- Right Panel: Execution Plan & Activity Logs -->
+                <div class="right-panel">
+                    <!-- Execution Plan -->
+                    <section id="plan-card" class="glass-card plan-card hidden">
+                        <h2><i class="fa-solid fa-route"></i> Generated Execution Plan</h2>
+                        <div id="action-items-container" class="action-items-container">
+                            <!-- Action item cards loaded dynamically -->
+                        </div>
+                    </section>
+
+                    <!-- Activity Trace / Log console -->
+                    <section class="glass-card trace-card">
+                        <div class="trace-header">
+                            <h2><i class="fa-solid fa-terminal"></i> Activity Trace</h2>
+                            <button id="btn-clear-logs" class="btn btn-text" onclick="clearLogs()"><i class="fa-solid fa-trash-can"></i> Clear</button>
+                        </div>
+                        <div id="log-console" class="log-console">
+                            <div class="log-line info">[System] Prototype ready. Awaiting intake submission.</div>
+                        </div>
+                    </section>
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- Edit Action Parameters Modal -->
+    <div id="edit-modal" class="modal hidden">
+        <div class="modal-content glass-card">
+            <div class="modal-header">
+                <h3>Edit Action Parameters</h3>
+                <button class="btn-close" onclick="closeEditModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="edit-params-form">
+                    <!-- Dynamic form parameters inject here -->
+                </form>
+            </div>
+            <div class="modal-footer">
+                <button class="btn btn-secondary" onclick="closeEditModal()">Cancel</button>
+                <button class="btn btn-primary" id="btn-save-edit">Save & Execute</button>
+            </div>
+        </div>
+    </div>
+    
+    <script src="static/app.js"></script>
+</body>
+</html>
