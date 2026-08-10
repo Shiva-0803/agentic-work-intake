@@ -785,7 +785,11 @@ async def post_intake(
         try:
             interpretation = call_real_llm(text, effective_api_type, effective_api_key)
         except Exception as e:
-            log_event(request_id, "ERROR", f"LLM execution error: {str(e)}. Falling back to Mock parser.")
+            err_msg = str(e)
+            if "429" in err_msg or "resource_exhausted" in err_msg.lower() or "quota" in err_msg.lower():
+                log_event(request_id, "WARN", "Gemini API Quota Exceeded (429). Falling back to Simulation Mode. (Free tier limits: 15 requests per minute, 20 requests per day for gemini-3.5-flash).")
+            else:
+                log_event(request_id, "ERROR", f"LLM execution error: {err_msg[:150]}. Falling back to Mock parser.")
             interpretation = get_mock_ai_response(text)
 
     # 3. Store the structured Interpretation
