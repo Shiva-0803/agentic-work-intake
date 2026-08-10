@@ -319,7 +319,7 @@ Ensure you include:
 
 Make it look like a premium corporate report. Return ONLY the raw markdown content without code block backticks.
 """
-                models_to_try = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+                models_to_try = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash']
                 response = None
                 last_error = None
                 for model_name in models_to_try:
@@ -667,7 +667,7 @@ If crucial details like names, dates, or documents are missing, mark the action 
                 "required": ["task_title", "summary", "priority", "deadline", "action_items"]
             }
             
-            models_to_try = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+            models_to_try = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash']
             response = None
             last_error = None
             for model_name in models_to_try:
