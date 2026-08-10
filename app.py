@@ -4,6 +4,7 @@ import sqlite3
 import datetime
 import re
 import asyncio
+import time
 from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Body
@@ -323,17 +324,24 @@ Make it look like a premium corporate report. Return ONLY the raw markdown conte
                 response = None
                 last_error = None
                 for model_name in models_to_try:
-                    try:
-                        log_event(request_id, "INFO", f"Attempting report generation with model {model_name}...")
-                        response = client.models.generate_content(
-                            model=model_name,
-                            contents=report_prompt,
-                        )
+                    for attempt in range(3):
+                        try:
+                            log_event(request_id, "INFO", f"Attempting report generation with model {model_name} (attempt {attempt + 1})...")
+                            response = client.models.generate_content(
+                                model=model_name,
+                                contents=report_prompt,
+                            )
+                            break
+                        except Exception as model_err:
+                            last_error = model_err
+                            log_event(request_id, "WARN", f"Model {model_name} attempt {attempt + 1} failed: {str(model_err)}")
+                            if "429" in str(model_err) or "resource_exhausted" in str(model_err).lower():
+                                time.sleep(2.5)
+                                continue
+                            else:
+                                break
+                    if response:
                         break
-                    except Exception as model_err:
-                        last_error = model_err
-                        log_event(request_id, "WARN", f"Model {model_name} failed: {str(model_err)}")
-                        continue
                 
                 if not response:
                     raise last_error
@@ -671,19 +679,26 @@ If crucial details like names, dates, or documents are missing, mark the action 
             response = None
             last_error = None
             for model_name in models_to_try:
-                try:
-                    response = client.models.generate_content(
-                        model=model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            response_mime_type="application/json",
-                            response_schema=schema,
-                        ),
-                    )
+                for attempt in range(3):
+                    try:
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                            config=types.GenerateContentConfig(
+                                response_mime_type="application/json",
+                                response_schema=schema,
+                            ),
+                        )
+                        break
+                    except Exception as model_err:
+                        last_error = model_err
+                        if "429" in str(model_err) or "resource_exhausted" in str(model_err).lower():
+                            time.sleep(2.5)
+                            continue
+                        else:
+                            break
+                if response:
                     break
-                except Exception as model_err:
-                    last_error = model_err
-                    continue
             
             if not response:
                 raise last_error
