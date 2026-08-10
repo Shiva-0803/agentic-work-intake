@@ -319,10 +319,24 @@ Ensure you include:
 
 Make it look like a premium corporate report. Return ONLY the raw markdown content without code block backticks.
 """
-                response = client.models.generate_content(
-                    model='gemini-3.5-flash',
-                    contents=report_prompt,
-                )
+                models_to_try = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+                response = None
+                last_error = None
+                for model_name in models_to_try:
+                    try:
+                        log_event(request_id, "INFO", f"Attempting report generation with model {model_name}...")
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=report_prompt,
+                        )
+                        break
+                    except Exception as model_err:
+                        last_error = model_err
+                        log_event(request_id, "WARN", f"Model {model_name} failed: {str(model_err)}")
+                        continue
+                
+                if not response:
+                    raise last_error
                 content = response.text.strip()
                 if content.startswith("```markdown"):
                     content = content.split("```markdown")[1].split("```")[0].strip()
@@ -653,14 +667,26 @@ If crucial details like names, dates, or documents are missing, mark the action 
                 "required": ["task_title", "summary", "priority", "deadline", "action_items"]
             }
             
-            response = client.models.generate_content(
-                model='gemini-3.5-flash',
-                contents=prompt,
-                config=types.GenerateContentConfig(
-                    response_mime_type="application/json",
-                    response_schema=schema,
-                ),
-            )
+            models_to_try = ['gemini-2.5-flash', 'gemini-3.5-flash', 'gemini-2.0-flash', 'gemini-1.5-flash']
+            response = None
+            last_error = None
+            for model_name in models_to_try:
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            response_mime_type="application/json",
+                            response_schema=schema,
+                        ),
+                    )
+                    break
+                except Exception as model_err:
+                    last_error = model_err
+                    continue
+            
+            if not response:
+                raise last_error
             # Cleanup in case there are markdown JSON fences
             text_response = response.text.strip()
             if text_response.startswith("```json"):
