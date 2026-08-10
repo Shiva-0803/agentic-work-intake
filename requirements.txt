@@ -6,3 +6,4 @@ httpx
 beautifulsoup4
 google-genai
 openai
+markdown

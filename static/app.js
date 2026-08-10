@@ -342,7 +342,11 @@ function updateActionItemsList(actions) {
             
             // Check if output is a filepath to turn into click link
             if (action.tool_name === "create_task_record" && action.status === "completed") {
-                displayedOutput = `Task Brief markdown file saved successfully.<br>📂 Link: <a href="file:///${action.output.replace(/\\/g, '/')}" target="_blank">${action.output}</a>`;
+                const filename = action.output.split('/').pop().split('\\').pop();
+                displayedOutput = `Report generated successfully.<br>
+                <a href="/tasks/${filename}" target="_blank" class="btn btn-sm btn-edit" style="display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; text-decoration: none;">
+                    <i class="fa-solid fa-file-invoice"></i> View Report & Export PDF
+                </a>`;
             } else if (action.output.startsWith("{") || action.output.startsWith("[")) {
                 try {
                     // Prettify JSON output

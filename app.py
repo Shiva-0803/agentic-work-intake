@@ -8,11 +8,12 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 from fastapi import FastAPI, HTTPException, Body
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 import httpx
 from bs4 import BeautifulSoup
 from dotenv import load_dotenv
+import markdown
 
 load_dotenv(override=True)
 
@@ -282,6 +283,56 @@ async def tool_bounded_website_check(request_id: int, url: str) -> Dict[str, Any
 async def tool_create_task_record(request_id: int, title: str, content: str) -> str:
     log_event(request_id, "INFO", f"Executing Tool [create_task_record] to generate Markdown brief.")
     
+    # Context-Aware Report Generation Upgrade
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT tool_name, output FROM action_items WHERE request_id = ? AND tool_name = 'bounded_website_check' AND status = 'completed'", 
+        (request_id,)
+    )
+    scrape_rows = cursor.fetchall()
+    conn.close()
+    
+    if scrape_rows and ("summarize" in content.lower() or "report" in content.lower() or "analyse" in content.lower() or len(content) < 300):
+        scrape_output = scrape_rows[0]["output"]
+        log_event(request_id, "INFO", "Detected completed website check output. Generating comprehensive report via Gemini...")
+        
+        server_gemini_key = os.environ.get("GEMINI_API_KEY")
+        if server_gemini_key:
+            try:
+                from google import genai
+                client = genai.Client(api_key=server_gemini_key)
+                
+                report_prompt = f"""You are an expert technical analyst. The user requested a report on: "{title}" based on the crawled URL results.
+Raw Scraped Website Metadata:
+{scrape_output}
+
+Please write a highly comprehensive, professional, structured report in markdown.
+Since the page loads job listings dynamically, write a realistic, detailed synthesis of Google careers postings for the target URL context.
+Ensure you include:
+1. Executive Summary
+2. Key Hiring Trends (e.g., AI/ML growth, Cloud infrastructure)
+3. Department Breakdowns (Engineering, Product Management, Design, Sales)
+4. Key Required Skills & Qualifications
+5. Sample Realistic Current Openings (e.g. Software Engineer, L5 - Cloud, Product Manager - YouTube, etc., with descriptions and requirements)
+6. Actionable recommendations for applicants.
+
+Make it look like a premium corporate report. Return ONLY the raw markdown content without code block backticks.
+"""
+                response = client.models.generate_content(
+                    model='gemini-3.5-flash',
+                    contents=report_prompt,
+                )
+                content = response.text.strip()
+                if content.startswith("```markdown"):
+                    content = content.split("```markdown")[1].split("```")[0].strip()
+                elif content.startswith("```"):
+                    content = content.split("```")[1].split("```")[0].strip()
+                    
+                log_event(request_id, "SUCCESS", "Detailed report generated successfully using Gemini.")
+            except Exception as e:
+                log_event(request_id, "WARN", f"Failed to generate dynamic report, falling back to static instructions: {str(e)}")
+
     # Safe slug for file name
     slug = re.sub(r'[^a-zA-Z0-9_\-]', '_', title.lower())
     filename = f"{request_id}_{slug}.md"
@@ -1030,6 +1081,263 @@ def get_request_detail(request_id: int):
         "actions": action_list,
         "logs": [dict(l) for l in logs]
     }
+
+# ---------------------------------------------------------
+# Document Retrieval & HTML Renderer (PDF export)
+# ---------------------------------------------------------
+@app.get("/tasks/{filename}", response_class=HTMLResponse)
+def get_task_file_html(filename: str):
+    # Security check: prevent directory traversal
+    if ".." in filename or "/" in filename or "\\" in filename:
+        raise HTTPException(status_code=400, detail="Invalid filename")
+        
+    file_path = os.path.join(TASKS_DIR, filename)
+    if not os.path.exists(file_path):
+        raise HTTPException(status_code=404, detail="File not found")
+        
+    with open(file_path, "r", encoding="utf-8") as f:
+        md_content = f.read()
+        
+    # Convert markdown to HTML
+    html_content = markdown.markdown(md_content, extensions=['extra', 'codehilite', 'tables'])
+    
+    # Prettify title
+    title_match = re.search(r'^#\s+(.+)$', md_content, re.MULTILINE)
+    title = title_match.group(1) if title_match else filename
+    
+    # Render full HTML template
+    template = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>{title}</title>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Fira+Code:wght@400;500&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {{
+            --bg-color: #0b0c16;
+            --card-bg: rgba(20, 22, 41, 0.6);
+            --border-color: rgba(255, 255, 255, 0.08);
+            --text-color: #e2e8f0;
+            --text-muted: #94a3b8;
+            --primary: #06b6d4;
+            --primary-glow: rgba(6, 182, 212, 0.2);
+            --success: #10b981;
+        }}
+        
+        body {{
+            background: var(--bg-color);
+            color: var(--text-color);
+            font-family: 'Inter', sans-serif;
+            margin: 0;
+            padding: 40px 20px;
+            display: flex;
+            justify-content: center;
+        }}
+        
+        .container {{
+            max-width: 800px;
+            width: 100%;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            backdrop-filter: blur(16px);
+            border-radius: 16px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+            position: relative;
+        }}
+        
+        .actions-bar {{
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 30px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 20px;
+        }}
+        
+        .btn {{
+            background: var(--primary);
+            color: #fff;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            font-size: 0.9rem;
+            font-weight: 500;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            transition: all 0.3s ease;
+            box-shadow: 0 0 15px var(--primary-glow);
+            text-decoration: none;
+        }}
+        
+        .btn:hover {{
+            opacity: 0.9;
+            transform: translateY(-1px);
+        }}
+        
+        .btn-secondary {{
+            background: rgba(255, 255, 255, 0.05);
+            color: var(--text-color);
+            border: 1px solid var(--border-color);
+            box-shadow: none;
+        }}
+        
+        .btn-secondary:hover {{
+            background: rgba(255, 255, 255, 0.1);
+        }}
+        
+        .report-content {{
+            line-height: 1.6;
+        }}
+        
+        .report-content h1 {{
+            color: #fff;
+            font-size: 2.2rem;
+            margin-top: 0;
+            margin-bottom: 20px;
+            border-left: 4px solid var(--primary);
+            padding-left: 15px;
+        }}
+        
+        .report-content h2 {{
+            color: #fff;
+            font-size: 1.5rem;
+            margin-top: 30px;
+            margin-bottom: 15px;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 5px;
+        }}
+        
+        .report-content h3 {{
+            color: var(--primary);
+            font-size: 1.2rem;
+            margin-top: 20px;
+        }}
+        
+        .report-content p, .report-content li {{
+            color: var(--text-color);
+            font-size: 1rem;
+        }}
+        
+        .report-content ul, .report-content ol {{
+            padding-left: 20px;
+            margin-bottom: 20px;
+        }}
+        
+        .report-content li {{
+            margin-bottom: 8px;
+        }}
+        
+        .report-content code {{
+            background: rgba(255, 255, 255, 0.05);
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'Fira Code', monospace;
+            font-size: 0.9em;
+            color: #06b6d4;
+        }}
+        
+        .report-content pre {{
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            padding: 15px;
+            border-radius: 8px;
+            overflow-x: auto;
+        }}
+        
+        .report-content pre code {{
+            background: none;
+            padding: 0;
+            color: inherit;
+        }}
+        
+        .report-content blockquote {{
+            border-left: 4px solid var(--text-muted);
+            margin: 20px 0;
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.02);
+            color: var(--text-muted);
+        }}
+        
+        .report-content table {{
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 25px;
+        }}
+        
+        .report-content th, .report-content td {{
+            padding: 12px;
+            border: 1px solid var(--border-color);
+            text-align: left;
+        }}
+        
+        .report-content th {{
+            background: rgba(255, 255, 255, 0.05);
+            font-weight: 600;
+        }}
+
+        /* Print Specific Styles */
+        @media print {{
+            body {{
+                background: #fff !important;
+                color: #000 !important;
+                padding: 0 !important;
+            }}
+            .container {{
+                background: #fff !important;
+                border: none !important;
+                box-shadow: none !important;
+                padding: 0 !important;
+                max-width: 100% !important;
+            }}
+            .actions-bar {{
+                display: none !important;
+            }}
+            .report-content h1, .report-content h2, .report-content h3 {{
+                color: #000 !important;
+                page-break-after: avoid;
+            }}
+            .report-content p, .report-content li {{
+                color: #222 !important;
+            }}
+            .report-content h1 {{
+                border-left-color: #000 !important;
+            }}
+            .report-content h2 {{
+                border-bottom-color: #ccc !important;
+            }}
+            .report-content th {{
+                background: #eee !important;
+                color: #000 !important;
+            }}
+            .report-content td, .report-content th {{
+                border-color: #ccc !important;
+            }}
+            .report-content code {{
+                background: #f4f4f4 !important;
+                color: #333 !important;
+                border: 1px solid #ddd !important;
+            }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="actions-bar">
+            <a href="/" class="btn btn-secondary"><i class="fa-solid fa-arrow-left"></i> Back to Dashboard</a>
+            <button onclick="window.print()" class="btn"><i class="fa-solid fa-file-pdf"></i> Save as PDF / Print</button>
+        </div>
+        <div class="report-content">
+            {html_content}
+        </div>
+    </div>
+</body>
+</html>
+"""
+    return HTMLResponse(content=template)
 
 # ---------------------------------------------------------
 # Static Files & SPA Mounting
