@@ -112,6 +112,16 @@ def init_db():
     )
     """)
     
+    # Create Verifications Table for Mail Authentication
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS verifications (
+        email TEXT PRIMARY KEY,
+        token TEXT NOT NULL,
+        verified INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
     conn.commit()
     conn.close()
 
@@ -1486,6 +1496,284 @@ def get_task_file_html(filename: str):
 </html>
 """
     return HTMLResponse(content=template)
+
+# ---------------------------------------------------------
+# Mail Authentication & OTP Verification Endpoints
+# ---------------------------------------------------------
+import random
+
+class SendOTPRequest(BaseModel):
+    email: str
+
+class VerifyOTPRequest(BaseModel):
+    email: str
+    otp: str
+
+@app.post("/api/auth/send-otp")
+def api_send_otp(req: SendOTPRequest):
+    email = req.email.strip()
+    if not email:
+        raise HTTPException(status_code=400, detail="Email is required")
+        
+    otp = "".join([str(random.randint(0, 9)) for _ in range(6)])
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO verifications (email, token, verified) VALUES (?, ?, 0)",
+        (email, otp)
+    )
+    conn.commit()
+    conn.close()
+    
+    # Try to send email using configured auth credentials
+    auth_user = os.environ.get("AUTH_SMTP_USER") or "banglore2122@gmail.com"
+    auth_pass = os.environ.get("AUTH_SMTP_PASS")
+    
+    email_dispatched = False
+    otp_simulated = None
+    
+    if auth_pass:
+        try:
+            import smtplib
+            from email.mime.text import MIMEText
+            from email.mime.multipart import MIMEMultipart
+            
+            msg = MIMEMultipart()
+            msg['From'] = auth_user
+            msg['To'] = email
+            msg['Subject'] = "IntelliWork Portal - Verification Code"
+            
+            verify_url = f"http://localhost:8000/api/auth/verify-link?email={email}&token={otp}"
+            
+            body = f"""Hello,
+            
+Your IntelliWork Portal verification OTP is: {otp}
+
+Alternatively, click the link below to verify your email instantly:
+{verify_url}
+
+Thank you,
+IntelliWork Portal Team
+"""
+            msg.attach(MIMEText(body, 'plain'))
+            
+            server = smtplib.SMTP("smtp.gmail.com", 587, timeout=10)
+            server.starttls()
+            server.login(auth_user, auth_pass)
+            server.sendmail(auth_user, email, msg.as_string())
+            server.quit()
+            
+            email_dispatched = True
+        except Exception as e:
+            otp_simulated = otp
+            log_event(0, "WARN", f"Real OTP email dispatch failed: {str(e)}. Falling back to simulation.")
+    else:
+        # Fallback to simulation mode if credentials aren't set on server
+        otp_simulated = otp
+        log_event(0, "INFO", f"[SIMULATION] Verification OTP sent to {email}. Code: {otp}")
+        
+    return {
+        "success": True,
+        "email_dispatched": email_dispatched,
+        "otp_simulated": otp_simulated,
+        "message": "Verification email dispatched." if email_dispatched else "Verification code generated (Simulation Mode)."
+    }
+
+@app.post("/api/auth/verify-otp")
+def api_verify_otp(req: VerifyOTPRequest):
+    email = req.email.strip()
+    otp = req.otp.strip()
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT token FROM verifications WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    
+    if not row:
+        conn.close()
+        raise HTTPException(status_code=400, detail="No verification requested for this email.")
+        
+    if row["token"] == otp:
+        cursor.execute("UPDATE verifications SET verified = 1 WHERE email = ?", (email,))
+        conn.commit()
+        conn.close()
+        return {"success": True, "message": "Email verified successfully."}
+    else:
+        conn.close()
+        raise HTTPException(status_code=400, detail="Invalid verification code.")
+
+@app.get("/api/auth/verify-link", response_class=HTMLResponse)
+def api_verify_link(email: str, token: str):
+    email = email.strip()
+    token = token.strip()
+    
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT token FROM verifications WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    
+    success = False
+    if row and row["token"] == token:
+        cursor.execute("UPDATE verifications SET verified = 1 WHERE email = ?", (email,))
+        conn.commit()
+        success = True
+    conn.close()
+    
+    if success:
+        html_content = f"""<!DOCTYPE html>
+<html>
+<head>
+    <title>Email Verified Successfully</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {{
+            background: #f8fafc;
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }}
+        .card {{
+            background: #ffffff;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            padding: 40px;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+            max-width: 440px;
+            width: 100%;
+        }}
+        .icon {{
+            font-size: 4rem;
+            color: #059669;
+            margin-bottom: 20px;
+            animation: scaleIn 0.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+        }}
+        h1 {{
+            color: #0f172a;
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }}
+        p {{
+            color: #475569;
+            font-size: 1rem;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }}
+        .btn {{
+            display: inline-block;
+            background: #4f46e5;
+            color: #ffffff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+            transition: all 0.2s;
+        }}
+        .btn:hover {{
+            background: #3730a3;
+            transform: translateY(-1px);
+        }}
+        @keyframes scaleIn {{
+            from {{ transform: scale(0); }}
+            to {{ transform: scale(1); }}
+        }}
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon"><i class="fa-solid fa-circle-check"></i></div>
+        <h1>Verification Successful</h1>
+        <p>Your email <strong>{email}</strong> has been successfully verified. You can now return to the portal to configure your SMTP settings.</p>
+        <a href="/" class="btn">Go to Dashboard</a>
+    </div>
+</body>
+</html>
+"""
+    else:
+        html_content = """<!DOCTYPE html>
+<html>
+<head>
+    <title>Verification Failed</title>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        body {
+            background: #f8fafc;
+            font-family: 'Outfit', sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            margin: 0;
+        }
+        .card {
+            background: #ffffff;
+            border: 1px solid rgba(15, 23, 42, 0.08);
+            padding: 40px;
+            border-radius: 16px;
+            text-align: center;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.04);
+            max-width: 440px;
+            width: 100%;
+        }
+        .icon {
+            font-size: 4rem;
+            color: #dc2626;
+            margin-bottom: 20px;
+        }
+        h1 {
+            color: #0f172a;
+            font-size: 1.8rem;
+            margin-bottom: 10px;
+        }
+        p {
+            color: #475569;
+            font-size: 1rem;
+            line-height: 1.6;
+            margin-bottom: 30px;
+        }
+        .btn {
+            display: inline-block;
+            background: #64748b;
+            color: #ffffff;
+            padding: 12px 24px;
+            border-radius: 8px;
+            text-decoration: none;
+            font-weight: 500;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <div class="icon"><i class="fa-solid fa-circle-xmark"></i></div>
+        <h1>Verification Failed</h1>
+        <p>The verification link is invalid, expired, or has already been used.</p>
+        <a href="/" class="btn">Return to Dashboard</a>
+    </div>
+</body>
+</html>
+"""
+    return HTMLResponse(content=html_content)
+
+@app.get("/api/auth/check-status")
+def api_check_auth_status(email: str):
+    email = email.strip()
+    conn = get_db()
+    cursor = conn.cursor()
+    cursor.execute("SELECT verified FROM verifications WHERE email = ?", (email,))
+    row = cursor.fetchone()
+    conn.close()
+    
+    verified = False
+    if row and row["verified"] == 1:
+        verified = True
+        
+    return {"verified": verified}
 
 # ---------------------------------------------------------
 # Static Files & SPA Mounting

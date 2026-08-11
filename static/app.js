@@ -609,5 +609,191 @@ window.addEventListener("DOMContentLoaded", () => {
     // Auto-load SMTP credentials from browser storage
     loadSMTPSettings();
     
+    // Check URL parameters for verify-link redirects
+    const urlParams = new URLSearchParams(window.location.search);
+    if (urlParams.get("verified") === "true" && urlParams.get("email")) {
+        const email = urlParams.get("email");
+        localStorage.setItem("verified_email", email);
+        // Clear query parameters from URL
+        window.history.replaceState({}, document.title, window.location.pathname);
+        
+        // Open configuration dropdown
+        configDropdown.classList.remove("hidden");
+        addConsoleLog("SYSTEM", `Email ${email} verified via link click! SMTP configuration unlocked.`, "success");
+    }
+    
+    // Update SMTP fields lock status based on verification
+    updateSMTPFieldsLock();
+    
     fetchRequestHistory();
 });
+
+// ---------------------------------------------------------
+// Mail Authentication (OTP / Link) Logic & Auth Gate
+// ---------------------------------------------------------
+// Gate Elements
+const authGateOverlay = document.getElementById("auth-gate-overlay");
+const btnGateSendOtp = document.getElementById("btn-gate-send-otp");
+const btnGateVerifyOtp = document.getElementById("btn-gate-verify-otp");
+const gateEmail = document.getElementById("gate-email");
+const gateOtp = document.getElementById("gate-otp");
+const gateOtpGroup = document.getElementById("gate-otp-group");
+const gateOtpSimTip = document.getElementById("gate-otp-simulation-tip");
+const gateSimulatedOtpCode = document.getElementById("gate-simulated-otp-code");
+
+// Helper to handle OTP dispatch requests
+async function requestOTP(emailInputEl, sendBtnEl, otpGroupEl, simTipEl, simCodeEl) {
+    const email = emailInputEl.value.trim();
+    if (!email) {
+        alert("Please enter a valid email address.");
+        return false;
+    }
+    
+    sendBtnEl.disabled = true;
+    sendBtnEl.innerText = "Sending...";
+    
+    try {
+        const res = await fetch("/api/auth/send-otp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email })
+        });
+        const data = await res.json();
+        
+        if (data.success) {
+            otpGroupEl.classList.remove("hidden");
+            if (data.otp_simulated) {
+                simTipEl.classList.remove("hidden");
+                simCodeEl.innerText = data.otp_simulated;
+                addConsoleLog("SYSTEM", `OTP Verification Code sent to ${email} (Simulation Mode). Code: ${data.otp_simulated}`, "info");
+            } else {
+                simTipEl.classList.add("hidden");
+                addConsoleLog("SYSTEM", `OTP Verification Code sent to ${email} via SMTP. Check your inbox.`, "info");
+            }
+            alert("Verification code has been sent!");
+            return true;
+        } else {
+            alert("Failed to send OTP: " + data.message);
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error requesting verification code. Please check server logs.");
+    } finally {
+        sendBtnEl.disabled = false;
+        sendBtnEl.innerText = "Send Verification OTP";
+    }
+    return false;
+}
+
+// Helper to handle OTP verification requests
+async function verifyOTP(emailInputEl, otpInputEl, verifyBtnEl, callback) {
+    const email = emailInputEl.value.trim();
+    const otp = otpInputEl.value.trim();
+    if (!email || !otp) {
+        alert("Please enter email and verification code.");
+        return;
+    }
+    
+    verifyBtnEl.disabled = true;
+    verifyBtnEl.innerText = "Verifying...";
+    
+    try {
+        const res = await fetch("/api/auth/verify-otp", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, otp })
+        });
+        const data = await res.json();
+        
+        if (res.ok && data.success) {
+            localStorage.setItem("verified_email", email);
+            callback(email);
+        } else {
+            alert("Verification failed: " + (data.detail || data.message || "Invalid code"));
+        }
+    } catch (err) {
+        console.error(err);
+        alert("Error verifying code.");
+    } finally {
+        verifyBtnEl.disabled = false;
+        verifyBtnEl.innerText = "Verify & Access Portal";
+    }
+}
+
+// Bind Gate Listeners
+btnGateSendOtp.addEventListener("click", () => {
+    requestOTP(gateEmail, btnGateSendOtp, gateOtpGroup, gateOtpSimTip, gateSimulatedOtpCode);
+});
+btnGateVerifyOtp.addEventListener("click", () => {
+    verifyOTP(gateEmail, gateOtp, btnGateVerifyOtp, (email) => {
+        gateOtpGroup.classList.add("hidden");
+        addConsoleLog("SYSTEM", `User authenticated as ${email}. Access granted.`, "success");
+        
+        // Hide gate screen with fade transition
+        authGateOverlay.style.opacity = "0";
+        setTimeout(() => {
+            authGateOverlay.classList.add("hidden");
+        }, 500);
+        
+        // Unlock main layout SMTP inputs
+        updateSMTPFieldsLock();
+        alert("Verification successful! Welcome to the IntelliWork Portal.");
+    });
+});
+
+// Bind Log Out Listener
+document.getElementById("btn-logout").addEventListener("click", () => {
+    localStorage.removeItem("verified_email");
+    
+    // Reset gate state variables
+    gateOtp.value = "";
+    gateOtpGroup.classList.add("hidden");
+    
+    // Relock inputs and show gate overlay
+    updateSMTPFieldsLock();
+    configDropdown.classList.add("hidden");
+    
+    addConsoleLog("SYSTEM", "User logged out. Portal locked.", "info");
+    alert("You have logged out. Portal access is now locked.");
+});
+
+function updateSMTPFieldsLock() {
+    const verifiedEmail = localStorage.getItem("verified_email");
+    if (!verifiedEmail) {
+        setSMTPFieldsDisabled(true);
+        authGateOverlay.classList.remove("hidden");
+        authGateOverlay.style.opacity = "1";
+        return;
+    }
+    
+    // Check status with backend
+    fetch(`/api/auth/check-status?email=${encodeURIComponent(verifiedEmail)}`)
+        .then(res => res.json())
+        .then(data => {
+            if (data.verified) {
+                setSMTPFieldsDisabled(false);
+                gateEmail.value = verifiedEmail;
+                
+                // Hide gate screen if verified
+                authGateOverlay.classList.add("hidden");
+            } else {
+                setSMTPFieldsDisabled(true);
+                localStorage.removeItem("verified_email");
+                authGateOverlay.classList.remove("hidden");
+                authGateOverlay.style.opacity = "1";
+            }
+        })
+        .catch(err => {
+            console.error("Error checking auth status:", err);
+            setSMTPFieldsDisabled(true);
+            authGateOverlay.classList.remove("hidden");
+            authGateOverlay.style.opacity = "1";
+        });
+}
+
+function setSMTPFieldsDisabled(disabled) {
+    document.getElementById("smtp-host").disabled = disabled;
+    document.getElementById("smtp-port").disabled = disabled;
+    document.getElementById("smtp-user").disabled = disabled;
+    document.getElementById("smtp-pass").disabled = disabled;
+}
