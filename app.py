@@ -207,12 +207,10 @@ async def tool_draft_communication(
     smtp_config: Optional[Dict[str, Any]] = None
 ) -> str:
     log_event(request_id, "INFO", f"Executing Tool [draft_communication] for recipient: {recipient_name} ({recipient_email or 'no email provided'})")
-    # Generate draft communication block
-    draft = f"""From: Agent Automation <agent@company.com>
-To: {recipient_name} <{recipient_email or ''}>
-Subject: Follow-up regarding {topic}
-
-Dear {recipient_name},
+    
+    # Establish fallback templates
+    subject = f"Follow-up regarding {topic}"
+    body = f"""Dear {recipient_name},
 
 I hope this message finds you well. 
 
@@ -222,14 +220,91 @@ Following up on our recent discussion regarding "{topic}", I wanted to share a b
 We will keep you updated as progress is made. Please let us know if you have any questions or additional feedback.
 
 Best regards,
-Automation Agent
+Automation Agent"""
+
+    server_gemini_key = os.environ.get("GEMINI_API_KEY")
+    if server_gemini_key:
+        try:
+            from google import genai
+            client = genai.Client(api_key=server_gemini_key)
+            
+            prompt = f"""You are a professional business communication assistant.
+Your task is to draft an email based on the following input:
+Recipient Name: {recipient_name}
+Topic: {topic}
+Key Points/Context: {context}
+
+Please generate a professional, context-appropriate email subject line and body.
+Do NOT use fixed generic opening lines (like "Following up on our recent discussion") unless they are specifically appropriate for the context. Instead, write an email that fits the context naturally.
+
+Format your output EXACTLY as:
+Subject: <Generated Subject Line>
+Body:
+<Generated Email Body>
+
+Do not include any markdown styling like code block backticks (e.g. ```) or other explanations. Just return the Subject and the Body.
+"""
+            models_to_try = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash']
+            response = None
+            last_err = None
+            for model_name in models_to_try:
+                for attempt in range(3):
+                    try:
+                        log_event(request_id, "INFO", f"Drafting email via Gemini model {model_name} (attempt {attempt + 1})...")
+                        response = client.models.generate_content(
+                            model=model_name,
+                            contents=prompt,
+                        )
+                        break
+                    except Exception as merr:
+                        last_err = merr
+                        log_event(request_id, "WARN", f"Model {model_name} attempt {attempt + 1} failed: {str(merr)}")
+                        if "429" in str(merr) or "resource_exhausted" in str(merr).lower():
+                            import time
+                            time.sleep(2.5)
+                            continue
+                        else:
+                            break
+                if response:
+                    break
+            
+            if response and response.text:
+                content = response.text.strip()
+                lines = content.split('\n')
+                parsed_subject = None
+                parsed_body_lines = []
+                for line in lines:
+                    if line.strip().lower().startswith("subject:"):
+                        parsed_subject = line.split(":", 1)[1].strip()
+                    elif line.strip().lower().startswith("body:"):
+                        continue
+                    else:
+                        parsed_body_lines.append(line)
+                        
+                if parsed_subject:
+                    subject = parsed_subject
+                if parsed_body_lines:
+                    body = "\n".join(parsed_body_lines).strip()
+                    
+                log_event(request_id, "SUCCESS", f"Dynamic email draft generated successfully using Gemini. Subject: '{subject}'")
+            else:
+                if last_err:
+                    raise last_err
+        except Exception as e:
+            log_event(request_id, "WARN", f"Failed to draft email via Gemini, falling back to static template: {str(e)}")
+
+    draft = f"""From: Agent Automation <agent@company.com>
+To: {recipient_name} <{recipient_email or ''}>
+Subject: {subject}
+
+{body}
 """
     log_event(request_id, "SUCCESS", f"Drafted communication for {recipient_name}.")
     
     # Real-Time Email dispatch:
     if recipient_email and smtp_config and smtp_config.get("username") and smtp_config.get("password"):
         log_event(request_id, "INFO", f"Triggering real-time email dispatch to {recipient_email}...")
-        sent, message = await asyncio.to_thread(send_real_email_sync, request_id, recipient_email, f"Follow-up regarding {topic}", draft, smtp_config)
+        sent, message = await asyncio.to_thread(send_real_email_sync, request_id, recipient_email, subject, draft, smtp_config)
         if not sent:
             log_event(request_id, "ERROR", f"Real-time email dispatch failed: {message}")
             raise ValueError(message)
