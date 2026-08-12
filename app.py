@@ -1149,6 +1149,10 @@ async def approve_action(action_id: int, payload: Optional[Dict[str, Any]] = Bod
         conn.close()
         raise HTTPException(status_code=404, detail="Action item not found.")
         
+    if action["status"] in ["approved", "executing", "completed"]:
+        conn.close()
+        return {"status": "success", "message": f"Action #{action_id} is already approved or executed."}
+        
     request_id = action["request_id"]
     log_event(request_id, "INFO", f"Human APPROVED Action #{action_id}: '{action['title']}'.")
     
@@ -1197,6 +1201,10 @@ async def edit_and_approve_action(action_id: int, payload: Dict[str, Any] = Body
     if not action:
         conn.close()
         raise HTTPException(status_code=404, detail="Action item not found.")
+        
+    if action["status"] in ["approved", "executing", "completed"]:
+        conn.close()
+        return {"status": "success", "message": f"Action #{action_id} is already approved or executed."}
         
     request_id = action["request_id"]
     edited_args = payload.get("edited_args", {})

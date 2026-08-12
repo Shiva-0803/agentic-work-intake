@@ -424,7 +424,22 @@ function getClientConfig() {
     return null;
 }
 
+// Global lock for action button execution
+const executingActionIds = new Set();
+
 async function approveAction(actionId) {
+    if (executingActionIds.has(actionId)) return;
+    executingActionIds.add(actionId);
+    
+    // Visually disable the button if found in DOM
+    const btn = document.querySelector(`button[onclick="approveAction(${actionId})"]`);
+    let originalHtml = "";
+    if (btn) {
+        btn.disabled = true;
+        originalHtml = btn.innerHTML;
+        btn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Running...`;
+    }
+    
     addConsoleLog("USER", `Approved Action #${actionId}. Initiating execution...`, "success");
     const clientConfig = getClientConfig();
     try {
@@ -440,6 +455,12 @@ async function approveAction(actionId) {
         }
     } catch(e) {
         console.error(e);
+    } finally {
+        executingActionIds.delete(actionId);
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalHtml;
+        }
     }
 }
 
@@ -536,8 +557,15 @@ function closeEditModal() {
 btnSaveEdit.addEventListener("click", async (e) => {
     e.preventDefault();
     if (!editingActionId) return;
+    if (executingActionIds.has(editingActionId)) return;
     
     const actionId = editingActionId;
+    executingActionIds.add(actionId);
+    
+    const originalText = btnSaveEdit.innerText;
+    btnSaveEdit.disabled = true;
+    btnSaveEdit.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Executing...`;
+    
     const formData = new FormData(editParamsForm);
     const updatedArgs = {};
     formData.forEach((value, key) => {
@@ -568,6 +596,10 @@ btnSaveEdit.addEventListener("click", async (e) => {
         }
     } catch(err) {
         console.error(err);
+    } finally {
+        executingActionIds.delete(actionId);
+        btnSaveEdit.disabled = false;
+        btnSaveEdit.innerText = originalText;
     }
 });
 
