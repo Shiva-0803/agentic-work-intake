@@ -1045,40 +1045,97 @@ def get_mock_ai_response(text: str) -> InterpretationSchema:
                         return candidate
                 return None
             
-            # --- Smart topic generation from input context ---
+            # --- Intent-based topic generation ---
             def generate_smart_topic(input_text: str, url: Optional[str]) -> str:
-                """Generate a context-aware topic/subject from the user's actual intent."""
+                """Map the user's instruction intent to a clean, meaningful email topic/subject."""
                 txt = input_text.lower()
+                
+                # URL-based topics
                 if url:
                     domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url)
                     domain = domain_match.group(1) if domain_match else url
-                    if "review" in txt or "audit" in txt or "check" in txt or "summarise" in txt or "summarize" in txt or "analyze" in txt:
-                        return f"Website Analysis Report for {domain}"
+                    if any(w in txt for w in ["review", "audit", "check", "summarise", "summarize", "analyze", "analyse", "report"]):
+                        return f"Website Analysis Report: {domain}"
                     return f"Update Regarding {domain}"
                 
-                # Pattern-based topic extraction from common phrases
-                topic_patterns = [
-                    (r'(?:about|regarding|on)\s+(?:the\s+)?(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
-                    (r'(?:ask|inquire|check)\s+(?:about|on|for|where)?\s*(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
-                    (r'(?:update|status|progress)\s+(?:on|of|about|regarding)?\s*(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
-                ]
-                for pattern, _ in topic_patterns:
-                    m = re.search(pattern, input_text, re.IGNORECASE)
-                    if m:
-                        candidate = m.group(1).strip().rstrip('.,;:')
-                        # Remove email addresses from the topic
-                        candidate = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', candidate).strip()
-                        if len(candidate) > 4:
-                            return candidate.title()
+                # --- Intent detection: map instruction -> clean topic ---
+                # Condolence / Loss
+                if any(w in txt for w in ["condolen", "condolence", "demise", "loss", "passed away", "sorry for", "grieving", "bereaved", "sad news", "death", "deceased"]):
+                    # Extract what was lost (pet, person, etc.)
+                    obj_match = re.search(r'(?:demise|loss|death|passing)\s+of\s+(?:(?:his|her|their|my|your)\s+)?(\w+)', txt)
+                    obj = obj_match.group(1).title() if obj_match else "Your Loss"
+                    return f"Condolences on the Loss of Your {obj}"
                 
-                # Fallback: remove common verbs and extract meaningful words
-                stop_words = {"draft", "send", "email", "mail", "a", "an", "the", "to", "for", "and", "or", "please", "write", "compose", "create"}
-                meaningful = [w for w in input_text.split() if w.lower() not in stop_words and "@" not in w and not w.startswith("http")]
-                if meaningful:
-                    return " ".join(meaningful[:6]).title().rstrip('.,;:')
+                # Congratulations / Achievement
+                if any(w in txt for w in ["congratulat", "congrats", "achievement", "accomplish", "well done", "great job", "rank", "award", "won", "passed", "qualified", "cleared", "selected", "promoted"]):
+                    # Remove emails before matching to avoid picking up email local parts
+                    clean_txt = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', txt).strip()
+                    # Try to find achievement subject: 'on achieving the GATE rank' -> 'GATE Rank'
+                    obj_match = re.search(r'(?:achieving|cleared|passed|scored|received|won|earned|getting|got)\s+(?:the\s+)?(.{3,40}?)(?:\s+to\s+|\s*$)', clean_txt)
+                    if not obj_match:
+                        # fallback: look after known achievement words
+                        obj_match = re.search(r'(?:gate|jee|neet|upsc|gre|gmat|cat|exam|rank|award|position)\s+(\w+)', clean_txt)
+                    if obj_match:
+                        obj = obj_match.group(1).strip().title()
+                        obj = re.sub(r'\s+', ' ', obj)
+                    else:
+                        # Try to grab what comes after 'on the' or 'for the'
+                        obj_match2 = re.search(r'on\s+(?:the\s+)?([A-Z]\w+(?:\s+[A-Z]\w+)?)\s*(?:rank|achievement|award)?', txt.title())
+                        obj = obj_match2.group(1).strip() if obj_match2 else "Your Achievement"
+                    if not obj or len(obj) < 2 or obj.lower() in {"the", "a", "an", "your", "their", "achieving", "on", "for"}:
+                        obj = "Your Achievement"
+                    return f"Congratulations on {obj}"
+                
+                # Thank you / Appreciation
+                if any(w in txt for w in ["thank", "appreciate", "grateful", "gratitude", "kudos"]):
+                    return "Thank You - Appreciation Note"
+                
+                # Reminder / Follow-up
+                if any(w in txt for w in ["remind", "follow up", "follow-up", "deadline", "pending", "waiting", "overdue"]):
+                    obj_match = re.search(r'(?:remind|follow up|regarding|about)\s+(?:the\s+)?(.{4,40}?)(?:\s+to\s+|\s*$)', input_text, re.IGNORECASE)
+                    obj = obj_match.group(1).strip().rstrip('.,').title() if obj_match else "Pending Action"
+                    obj = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', obj).strip()
+                    return f"Friendly Reminder: {obj}" if obj else "Friendly Reminder"
+                
+                # Invitation / Meeting / Event
+                if any(w in txt for w in ["invite", "invitation", "join us", "attend", "meeting", "event", "webinar", "session", "workshop"]):
+                    obj_match = re.search(r'(?:to\s+(?:the\s+)?|for\s+(?:the\s+)?)(\w+(?:\s+\w+){0,3})', input_text, re.IGNORECASE)
+                    obj = obj_match.group(1).strip().title() if obj_match else "Upcoming Event"
+                    return f"Invitation: {obj}"
+                
+                # Check-in / Enquiry / Status / Whereabouts
+                if any(w in txt for w in ["check in", "check-in", "where about", "whereabout", "how are", "update on", "progress on", "enquire", "inquire", "ask about", "ask where", "recent result", "latest update", "any news"]):
+                    obj_match = re.search(r'(?:about|on|regarding|enquire|inquire|ask|results?|updates?)\s+(?:the\s+)?(.{4,40}?)(?:\s+to\s+|\s*$)', input_text, re.IGNORECASE)
+                    obj = obj_match.group(1).strip().rstrip('.,').title() if obj_match else "Recent Updates"
+                    obj = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', obj).strip()
+                    if not obj or len(obj) < 3:
+                        obj = "Recent Updates"
+                    return f"Checking In: {obj}" if obj else "Checking In"
+                
+                # Request / Need help
+                if any(w in txt for w in ["request", "could you", "can you", "please help", "need your", "require", "assist"]):
+                    return "Assistance Request"
+                
+                # Apology / Sorry
+                if any(w in txt for w in ["apolog", "sorry", "apologize", "apologise", "regret"]):
+                    return "An Apology"
+                
+                # Introduction / Intro
+                if any(w in txt for w in ["introduc", "introduce myself", "introduction"]):
+                    return "Introduction"
+                
+                # Generic fallback — extract the object after "email/mail about/for/regarding"
+                obj_match = re.search(r'(?:email|mail)\s+(?:about|for|regarding|on)\s+(?:the\s+)?(.{4,40}?)(?:\s+to\s+|\s*$)', input_text, re.IGNORECASE)
+                if obj_match:
+                    obj = obj_match.group(1).strip().rstrip('.,').title()
+                    obj = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', obj).strip()
+                    if len(obj) > 3:
+                        return obj
+                
                 return "General Communication"
             
             topic = generate_smart_topic(text, url_found)
+
             
             # Build action(s) — one per unique recipient email, or one with best defaults
             if unique_emails:
