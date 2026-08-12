@@ -165,10 +165,127 @@ class InterpretationSchema(BaseModel):
 # ---------------------------------------------------------
 # Real Tools Implementations
 # ---------------------------------------------------------
-def send_real_email_sync(request_id: int, recipient_email: str, subject: str, body: str, smtp_config: Dict[str, Any]) -> tuple[bool, str]:
+def convert_markdown_to_pdf_sync(md_file_path: str) -> str:
+    from reportlab.lib.pagesizes import letter
+    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer
+    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+    from reportlab.lib import colors
+    import re
+    
+    pdf_file_path = md_file_path.replace(".md", ".pdf")
+    
+    # Read markdown content
+    with open(md_file_path, "r", encoding="utf-8") as f:
+        md_text = f.read()
+        
+    doc = SimpleDocTemplate(
+        pdf_file_path, 
+        pagesize=letter,
+        rightMargin=54, leftMargin=54,
+        topMargin=54, bottomMargin=54
+    )
+    story = []
+    styles = getSampleStyleSheet()
+    
+    # Define custom styles
+    title_style = ParagraphStyle(
+        'DocTitle',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=22,
+        leading=26,
+        textColor=colors.HexColor('#1e1b4b'),
+        spaceAfter=15
+    )
+    
+    h1_style = ParagraphStyle(
+        'H1Style',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=16,
+        leading=20,
+        textColor=colors.HexColor('#312e81'),
+        spaceBefore=12,
+        spaceAfter=8,
+        keepWithNext=True
+    )
+    
+    h2_style = ParagraphStyle(
+        'H2Style',
+        parent=styles['Normal'],
+        fontName='Helvetica-Bold',
+        fontSize=12.5,
+        leading=16,
+        textColor=colors.HexColor('#4338ca'),
+        spaceBefore=10,
+        spaceAfter=6,
+        keepWithNext=True
+    )
+    
+    body_style = ParagraphStyle(
+        'BodyStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=10,
+        leading=13.5,
+        textColor=colors.HexColor('#1f2937'),
+        spaceAfter=8
+    )
+    
+    list_style = ParagraphStyle(
+        'ListStyle',
+        parent=styles['Normal'],
+        fontName='Helvetica',
+        fontSize=9.5,
+        leading=13,
+        textColor=colors.HexColor('#1f2937'),
+        leftIndent=15,
+        spaceAfter=4
+    )
+    
+    lines = md_text.split("\n")
+    for line in lines:
+        stripped = line.strip()
+        if not stripped:
+            continue
+            
+        if stripped.startswith("# "):
+            header_text = stripped[2:].replace("**", "").replace("*", "")
+            story.append(Paragraph(header_text, title_style))
+            story.append(Spacer(1, 10))
+        elif stripped.startswith("## "):
+            header_text = stripped[3:].replace("**", "").replace("*", "")
+            story.append(Paragraph(header_text, h1_style))
+        elif stripped.startswith("### "):
+            header_text = stripped[4:].replace("**", "").replace("*", "")
+            story.append(Paragraph(header_text, h2_style))
+        elif stripped.startswith("- ") or stripped.startswith("* "):
+            bullet_text = stripped[2:]
+            bullet_text = bullet_text.replace("**", "<b>").replace("`", "<i>")
+            count = bullet_text.count("<b>")
+            for _ in range(count // 2 + 1):
+                bullet_text = bullet_text.replace("<b>", "<b>", 1).replace("<b>", "</b>", 1)
+            story.append(Paragraph(f"&bull; {bullet_text}", list_style))
+        elif stripped.startswith("---"):
+            story.append(Spacer(1, 5))
+            story.append(Paragraph("<font color='#e5e7eb'>__________________________________________________________________</font>", body_style))
+            story.append(Spacer(1, 5))
+        else:
+            para_text = stripped.replace("**", "<b>").replace("`", "<i>")
+            count = para_text.count("<b>")
+            for _ in range(count // 2 + 1):
+                para_text = para_text.replace("<b>", "<b>", 1).replace("<b>", "</b>", 1)
+            story.append(Paragraph(para_text, body_style))
+            
+    doc.build(story)
+    return pdf_file_path
+
+def send_real_email_sync(request_id: int, recipient_email: str, subject: str, body: str, smtp_config: Dict[str, Any], attachment_path: Optional[str] = None) -> tuple[bool, str]:
     import smtplib
     from email.mime.text import MIMEText
     from email.mime.multipart import MIMEMultipart
+    from email.mime.application import MIMEApplication
+    import os
     
     smtp_host = smtp_config.get("host") or "smtp.gmail.com"
     try:
@@ -187,6 +304,14 @@ def send_real_email_sync(request_id: int, recipient_email: str, subject: str, bo
         msg['Subject'] = subject
         msg.attach(MIMEText(body, 'plain'))
         
+        if attachment_path and os.path.exists(attachment_path):
+            filename = os.path.basename(attachment_path)
+            with open(attachment_path, "rb") as f:
+                part = MIMEApplication(f.read(), Name=filename)
+            part['Content-Disposition'] = f'attachment; filename="{filename}"'
+            msg.attach(part)
+            log_event(request_id, "INFO", f"Attached file '{filename}' to the email.")
+            
         server = smtplib.SMTP(smtp_host, smtp_port, timeout=10)
         server.starttls()
         server.login(smtp_user, smtp_pass)
@@ -304,7 +429,28 @@ Subject: {subject}
     # Real-Time Email dispatch:
     if recipient_email and smtp_config and smtp_config.get("username") and smtp_config.get("password"):
         log_event(request_id, "INFO", f"Triggering real-time email dispatch to {recipient_email}...")
-        sent, message = await asyncio.to_thread(send_real_email_sync, request_id, recipient_email, subject, draft, smtp_config)
+        
+        pdf_path = None
+        try:
+            conn = get_db()
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT output FROM action_items WHERE request_id = ? AND tool_name = 'create_task_record' AND status = 'completed'", 
+                (request_id,)
+            )
+            task_rows = cursor.fetchall()
+            conn.close()
+            
+            if task_rows:
+                md_path = task_rows[0]["output"]
+                if md_path and os.path.exists(md_path):
+                    log_event(request_id, "INFO", f"Found generated markdown report: '{md_path}'. Converting to PDF attachment...")
+                    pdf_path = convert_markdown_to_pdf_sync(md_path)
+                    log_event(request_id, "SUCCESS", f"PDF report generated at: '{pdf_path}'.")
+        except Exception as pdf_err:
+            log_event(request_id, "WARN", f"Failed to generate PDF attachment: {str(pdf_err)}")
+            
+        sent, message = await asyncio.to_thread(send_real_email_sync, request_id, recipient_email, subject, body, smtp_config, pdf_path)
         if not sent:
             log_event(request_id, "ERROR", f"Real-time email dispatch failed: {message}")
             raise ValueError(message)
