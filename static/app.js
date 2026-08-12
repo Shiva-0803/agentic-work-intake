@@ -495,6 +495,8 @@ function openEditModal(actionId) {
     
     // Inject form inputs based on the tool
     if (toolName === "draft_communication") {
+        const verifiedEmail = localStorage.getItem("verified_email") || "";
+        const emailValue = currentArgs.recipient_email || verifiedEmail;
         editParamsForm.innerHTML = `
             <div class="form-group">
                 <label>Recipient Name:</label>
@@ -502,7 +504,7 @@ function openEditModal(actionId) {
             </div>
             <div class="form-group">
                 <label>Recipient Email:</label>
-                <input type="email" name="recipient_email" value="${currentArgs.recipient_email || ''}" required>
+                <input type="email" name="recipient_email" value="${emailValue}">
             </div>
             <div class="form-group">
                 <label>Topic:</label>
