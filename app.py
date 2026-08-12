@@ -171,6 +171,7 @@ def convert_markdown_to_pdf_sync(md_file_path: str) -> str:
     from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
     from reportlab.lib import colors
     import re
+    import html
     
     pdf_file_path = md_file_path.replace(".md", ".pdf")
     
@@ -250,31 +251,30 @@ def convert_markdown_to_pdf_sync(md_file_path: str) -> str:
             continue
             
         if stripped.startswith("# "):
-            header_text = stripped[2:].replace("**", "").replace("*", "")
+            header_text = html.escape(stripped[2:].replace("**", "").replace("*", ""))
             story.append(Paragraph(header_text, title_style))
             story.append(Spacer(1, 10))
         elif stripped.startswith("## "):
-            header_text = stripped[3:].replace("**", "").replace("*", "")
+            header_text = html.escape(stripped[3:].replace("**", "").replace("*", ""))
             story.append(Paragraph(header_text, h1_style))
         elif stripped.startswith("### "):
-            header_text = stripped[4:].replace("**", "").replace("*", "")
+            header_text = html.escape(stripped[4:].replace("**", "").replace("*", ""))
             story.append(Paragraph(header_text, h2_style))
         elif stripped.startswith("- ") or stripped.startswith("* "):
-            bullet_text = stripped[2:]
-            bullet_text = bullet_text.replace("**", "<b>").replace("`", "<i>")
-            count = bullet_text.count("<b>")
-            for _ in range(count // 2 + 1):
-                bullet_text = bullet_text.replace("<b>", "<b>", 1).replace("<b>", "</b>", 1)
+            bullet_text = html.escape(stripped[2:])
+            bullet_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', bullet_text)
+            bullet_text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', bullet_text)
+            bullet_text = re.sub(r'`(.*?)`', r'<font face="Courier">\1</font>', bullet_text)
             story.append(Paragraph(f"&bull; {bullet_text}", list_style))
         elif stripped.startswith("---"):
             story.append(Spacer(1, 5))
             story.append(Paragraph("<font color='#e5e7eb'>__________________________________________________________________</font>", body_style))
             story.append(Spacer(1, 5))
         else:
-            para_text = stripped.replace("**", "<b>").replace("`", "<i>")
-            count = para_text.count("<b>")
-            for _ in range(count // 2 + 1):
-                para_text = para_text.replace("<b>", "<b>", 1).replace("<b>", "</b>", 1)
+            para_text = html.escape(stripped)
+            para_text = re.sub(r'\*\*(.*?)\*\*', r'<b>\1</b>', para_text)
+            para_text = re.sub(r'\*(.*?)\*', r'<i>\1</i>', para_text)
+            para_text = re.sub(r'`(.*?)`', r'<font face="Courier">\1</font>', para_text)
             story.append(Paragraph(para_text, body_style))
             
     doc.build(story)
@@ -331,6 +331,19 @@ async def tool_draft_communication(
     recipient_email: Optional[str] = None, 
     smtp_config: Optional[Dict[str, Any]] = None
 ) -> str:
+    # Resolve recipient email from environment/smtp config if empty or a placeholder
+    smtp_config = smtp_config or {
+        "host": os.environ.get("AUTH_SMTP_HOST") or "smtp.gmail.com",
+        "port": os.environ.get("AUTH_SMTP_PORT") or "587",
+        "username": os.environ.get("AUTH_SMTP_USER"),
+        "password": os.environ.get("AUTH_SMTP_PASS"),
+        "sender": os.environ.get("AUTH_SMTP_USER")
+    }
+    
+    if not recipient_email or "@" not in str(recipient_email) or str(recipient_email).lower().strip() in ["my email", "me", "myself", "recipient", ""]:
+        if smtp_config and smtp_config.get("username"):
+            recipient_email = smtp_config.get("username")
+            
     log_event(request_id, "INFO", f"Executing Tool [draft_communication] for recipient: {recipient_name} ({recipient_email or 'no email provided'})")
     
     # Establish fallback templates
