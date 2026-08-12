@@ -346,19 +346,105 @@ async def tool_draft_communication(
             
     log_event(request_id, "INFO", f"Executing Tool [draft_communication] for recipient: {recipient_name} ({recipient_email or 'no email provided'})")
     
-    # Establish fallback templates
-    subject = f"Follow-up regarding {topic}"
-    body = f"""Dear {recipient_name},
+    # --- Intelligent fallback template based on intent analysis ---
+    def generate_smart_fallback(recipient: str, topic_str: str, context_str: str) -> tuple:
+        """Analyze the context to generate a context-appropriate subject and body instead of copy-pasting input."""
+        ctx_lower = context_str.lower()
+        
+        # Detect intent from context keywords
+        if any(w in ctx_lower for w in ["congratulat", "congrats", "achievement", "accomplished", "proud", "well done", "great job", "rank", "award", "won", "passed", "qualified"]):
+            subj = f"Congratulations, {recipient}!"
+            body_text = f"""Dear {recipient},
 
-I hope this message finds you well. 
+Heartfelt congratulations on your outstanding achievement regarding {topic_str}! This is a remarkable accomplishment and a testament to your hard work, dedication, and perseverance.
 
-Following up on our recent discussion regarding "{topic}", I wanted to share a brief update. Here are the key points from our conversation:
-{context}
+Your success is truly inspiring, and we are incredibly proud of you. This milestone is well-deserved, and we have no doubt that this is just the beginning of many more great achievements to come.
 
-We will keep you updated as progress is made. Please let us know if you have any questions or additional feedback.
+Wishing you continued success in all your future endeavors!
+
+Warm regards,
+Automation Agent"""
+        
+        elif any(w in ctx_lower for w in ["where about", "whereabout", "check in", "how are", "doing well", "status", "update on", "progress"]):
+            subj = f"Checking In - {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I hope this message finds you well. I wanted to reach out and check in with you regarding {topic_str}.
+
+It has been a while since we last connected, and I would love to hear how things are going on your end. If there are any updates or if there's anything I can assist with, please don't hesitate to let me know.
+
+Looking forward to hearing from you soon.
 
 Best regards,
 Automation Agent"""
+        
+        elif any(w in ctx_lower for w in ["remind", "deadline", "due", "pending", "follow up", "follow-up", "waiting"]):
+            subj = f"Friendly Reminder: {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I hope you are doing well. I wanted to send a friendly reminder regarding {topic_str}.
+
+If you have had the chance to look into this, I would appreciate any updates at your earliest convenience. Please let me know if you need any additional information or support from my end.
+
+Thank you for your attention to this matter.
+
+Best regards,
+Automation Agent"""
+        
+        elif any(w in ctx_lower for w in ["thank", "appreciate", "grateful", "gratitude"]):
+            subj = f"Thank You - {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I wanted to take a moment to express my sincere gratitude regarding {topic_str}. Your support and contribution have been invaluable.
+
+Thank you once again for everything. It truly makes a difference, and I deeply appreciate it.
+
+With warm regards,
+Automation Agent"""
+        
+        elif any(w in ctx_lower for w in ["invite", "invitation", "join", "attend", "meeting", "event", "session"]):
+            subj = f"Invitation: {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I hope this message finds you well. I would like to extend a warm invitation to you regarding {topic_str}.
+
+Your presence and participation would be greatly valued. Please let me know if you are available, and I will be happy to share further details.
+
+Looking forward to your positive response.
+
+Best regards,
+Automation Agent"""
+
+        elif any(w in ctx_lower for w in ["request", "need", "require", "could you", "can you", "please send", "provide"]):
+            subj = f"Request: {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I hope you are doing well. I am reaching out regarding {topic_str}.
+
+I would greatly appreciate your assistance with this matter. Please let me know if you need any additional context or information to proceed.
+
+Thank you in advance for your help.
+
+Best regards,
+Automation Agent"""
+        
+        else:
+            # Generic but still professional — does NOT copy-paste the input
+            subj = f"Regarding {topic_str}"
+            body_text = f"""Dear {recipient},
+
+I hope this message finds you well. I am writing to you regarding {topic_str}.
+
+I wanted to connect with you on this matter and would appreciate the opportunity to discuss it further. Please feel free to reach out at your convenience.
+
+Looking forward to hearing from you.
+
+Best regards,
+Automation Agent"""
+        
+        return subj, body_text
+    
+    subject, body = generate_smart_fallback(recipient_name, topic, context)
 
     server_gemini_key = os.environ.get("GEMINI_API_KEY")
     if server_gemini_key:
@@ -366,22 +452,28 @@ Automation Agent"""
             from google import genai
             client = genai.Client(api_key=server_gemini_key)
             
-            prompt = f"""You are a professional business communication assistant.
-Your task is to draft an email based on the following input:
-Recipient Name: {recipient_name}
-Topic: {topic}
-Key Points/Context: {context}
+            prompt = f"""You are a professional email composer. Your job is to UNDERSTAND the user's intent and write an original, polished email — NOT to copy or rephrase the user's raw input.
 
-Please generate a professional, context-appropriate email subject line and body.
-Do NOT use fixed generic opening lines (like "Following up on our recent discussion") unless they are specifically appropriate for the context. Instead, write an email that fits the context naturally.
+IMPORTANT RULES:
+1. READ the user's instruction below and understand WHAT they want to communicate (e.g., congratulate someone, ask for an update, make a request, etc.)
+2. COMPOSE an entirely original email that serves that purpose professionally
+3. DO NOT copy, quote, or echo the user's instruction text into the email body
+4. DO NOT use generic filler like "Following up on our recent discussion" unless it truly fits
+5. The email should read as if a human professional wrote it specifically for this purpose
+6. Generate a fitting subject line that matches the email's purpose (NOT "Follow-up regarding...")
+
+User's instruction: {context}
+
+Recipient Name: {recipient_name}
+Topic/Purpose: {topic}
 
 Format your output EXACTLY as:
-Subject: <Generated Subject Line>
+Subject: <your generated subject line>
 Body:
-<Generated Email Body>
+<your generated email body>
 
-Do not include any markdown styling like code block backticks (e.g. ```) or other explanations. Just return the Subject and the Body.
-"""
+Do not include any markdown, code blocks, or explanations. Just the Subject and Body."""
+
             models_to_try = ['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-3.5-flash']
             response = None
             last_err = None
@@ -429,7 +521,7 @@ Do not include any markdown styling like code block backticks (e.g. ```) or othe
                 if last_err:
                     raise last_err
         except Exception as e:
-            log_event(request_id, "WARN", f"Failed to draft email via Gemini, falling back to static template: {str(e)}")
+            log_event(request_id, "WARN", f"Failed to draft email via Gemini, falling back to smart template: {str(e)}")
 
     draft = f"""From: Agent Automation <agent@company.com>
 To: {recipient_name} <{recipient_email or ''}>
