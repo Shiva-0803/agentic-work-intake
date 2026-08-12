@@ -921,17 +921,30 @@ def get_mock_ai_response(text: str) -> InterpretationSchema:
                 )
             )
             
-        if "draft" in text_lower or "email" in text_lower:
+        if "draft" in text_lower or "email" in text_lower or "mail" in text_lower:
+            topic = "General Business Follow-up"
+            if url_found:
+                match = re.search(r'https?://(?:www\.)?([^/]+)', url_found)
+                domain = match.group(1) if match else url_found
+                topic = f"Website Analysis Report for {domain}"
+            else:
+                words = text.split()
+                # Clean and capitalize first 5 words to form a topic
+                clean_words = [re.sub(r'[^a-zA-Z0-9]', '', w) for w in words[:5]]
+                clean_words = [w for w in clean_words if w]
+                if clean_words:
+                    topic = " ".join(clean_words).title() + " Update"
+            
             actions.append(
                 ActionItemSchema(
-                    title="Draft General Email Communication",
-                    description="Create an email draft based on the input text.",
+                    title=f"Draft Email: {topic}",
+                    description=f"Create an email draft for {topic} based on the input text.",
                     route="human_review",
                     tool_name="draft_communication",
                     tool_args={
                         "recipient_name": "Valued Recipient",
-                        "topic": "General Business Follow-up",
-                        "context": text[:100] + "..."
+                        "topic": topic,
+                        "context": text
                     },
                     reason="Emails need human confirmation prior to dispatch."
                 )
