@@ -343,12 +343,16 @@ body {
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 10px;
     padding: 14px;
-    color: var(--text-primary);
+    color: #ffffff;
     font-family: var(--font-sans);
     font-size: 0.9rem;
     outline: none;
     resize: none;
     transition: var(--transition-normal);
+}
+#intake-text::placeholder {
+    color: #94a3b8;
+    opacity: 0.75;
 }
 #intake-text:focus {
     border-color: var(--color-cyan);
@@ -769,7 +773,7 @@ body {
     gap: 8px;
     line-height: 1.4;
 }
-.log-line.info { color: var(--text-secondary); }
+.log-line.info { color: #cbd5e1; }
 .log-line.warn { color: var(--color-amber); }
 .log-line.error { color: var(--color-rose); }
 .log-line.success { color: var(--color-emerald); }
