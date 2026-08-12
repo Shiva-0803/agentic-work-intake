@@ -922,33 +922,109 @@ def get_mock_ai_response(text: str) -> InterpretationSchema:
             )
             
         if "draft" in text_lower or "email" in text_lower or "mail" in text_lower:
-            topic = "General Business Follow-up"
-            if url_found:
-                match = re.search(r'https?://(?:www\.)?([^/]+)', url_found)
-                domain = match.group(1) if match else url_found
-                topic = f"Website Analysis Report for {domain}"
-            else:
-                words = text.split()
-                # Clean and capitalize first 5 words to form a topic
-                clean_words = [re.sub(r'[^a-zA-Z0-9]', '', w) for w in words[:5]]
-                clean_words = [w for w in clean_words if w]
-                if clean_words:
-                    topic = " ".join(clean_words).title() + " Update"
+            # --- Smart extraction of recipient emails from input text ---
+            email_matches = re.findall(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', text)
+            # Deduplicate while preserving order
+            seen_emails = set()
+            unique_emails = []
+            for em in email_matches:
+                if em.lower() not in seen_emails:
+                    seen_emails.add(em.lower())
+                    unique_emails.append(em)
             
-            actions.append(
-                ActionItemSchema(
-                    title=f"Draft Email: {topic}",
-                    description=f"Create an email draft for {topic} based on the input text.",
-                    route="human_review",
-                    tool_name="draft_communication",
-                    tool_args={
-                        "recipient_name": "Valued Recipient",
-                        "topic": topic,
-                        "context": text
-                    },
-                    reason="Emails need human confirmation prior to dispatch."
+            # --- Smart extraction of recipient name from input text ---
+            def derive_name_from_email(email_addr: str) -> str:
+                """Derive a readable name from an email address like 'john.doe@gmail.com' -> 'John Doe'."""
+                local_part = email_addr.split("@")[0]
+                # Replace common separators with spaces
+                name = re.sub(r'[._\-]+', ' ', local_part)
+                # Remove trailing digits (e.g. 'shiva2' -> 'shiva')
+                name = re.sub(r'\d+$', '', name).strip()
+                return name.title() if name else "Recipient"
+            
+            def extract_name_near_keyword(input_text: str) -> Optional[str]:
+                """Try to extract a name mentioned after 'to' in phrases like 'send email to Sarah' or 'draft a mail to John'."""
+                name_match = re.search(r'\bto\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)\b', input_text)
+                if name_match:
+                    candidate = name_match.group(1).strip()
+                    # Avoid matching common words that follow "to"
+                    skip_words = {"the", "a", "an", "my", "our", "their", "ask", "check", "review", "send", "get", "see", "do", "make"}
+                    if candidate.lower() not in skip_words:
+                        return candidate
+                return None
+            
+            # --- Smart topic generation from input context ---
+            def generate_smart_topic(input_text: str, url: Optional[str]) -> str:
+                """Generate a context-aware topic/subject from the user's actual intent."""
+                txt = input_text.lower()
+                if url:
+                    domain_match = re.search(r'https?://(?:www\.)?([^/]+)', url)
+                    domain = domain_match.group(1) if domain_match else url
+                    if "review" in txt or "audit" in txt or "check" in txt or "summarise" in txt or "summarize" in txt or "analyze" in txt:
+                        return f"Website Analysis Report for {domain}"
+                    return f"Update Regarding {domain}"
+                
+                # Pattern-based topic extraction from common phrases
+                topic_patterns = [
+                    (r'(?:about|regarding|on)\s+(?:the\s+)?(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
+                    (r'(?:ask|inquire|check)\s+(?:about|on|for|where)?\s*(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
+                    (r'(?:update|status|progress)\s+(?:on|of|about|regarding)?\s*(.{5,60?}?)(?:\s+to\s+|\s+and\s+|\s*$)', None),
+                ]
+                for pattern, _ in topic_patterns:
+                    m = re.search(pattern, input_text, re.IGNORECASE)
+                    if m:
+                        candidate = m.group(1).strip().rstrip('.,;:')
+                        # Remove email addresses from the topic
+                        candidate = re.sub(r'[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}', '', candidate).strip()
+                        if len(candidate) > 4:
+                            return candidate.title()
+                
+                # Fallback: remove common verbs and extract meaningful words
+                stop_words = {"draft", "send", "email", "mail", "a", "an", "the", "to", "for", "and", "or", "please", "write", "compose", "create"}
+                meaningful = [w for w in input_text.split() if w.lower() not in stop_words and "@" not in w and not w.startswith("http")]
+                if meaningful:
+                    return " ".join(meaningful[:6]).title().rstrip('.,;:')
+                return "General Communication"
+            
+            topic = generate_smart_topic(text, url_found)
+            
+            # Build action(s) — one per unique recipient email, or one with best defaults
+            if unique_emails:
+                for recipient_email in unique_emails:
+                    # Try to find name near the email mention or derive from address
+                    name = extract_name_near_keyword(text) or derive_name_from_email(recipient_email)
+                    actions.append(
+                        ActionItemSchema(
+                            title=f"Draft Email to {name}: {topic}",
+                            description=f"Create and send an email to {name} ({recipient_email}) about {topic}.",
+                            route="human_review",
+                            tool_name="draft_communication",
+                            tool_args={
+                                "recipient_name": name,
+                                "recipient_email": recipient_email,
+                                "topic": topic,
+                                "context": text
+                            },
+                            reason="Emails need human confirmation prior to dispatch."
+                        )
+                    )
+            else:
+                # No email found in input — use defaults
+                name = extract_name_near_keyword(text) or "Recipient"
+                actions.append(
+                    ActionItemSchema(
+                        title=f"Draft Email: {topic}",
+                        description=f"Create an email draft for {topic} based on the input text.",
+                        route="human_review",
+                        tool_name="draft_communication",
+                        tool_args={
+                            "recipient_name": name,
+                            "topic": topic,
+                            "context": text
+                        },
+                        reason="Emails need human confirmation prior to dispatch."
+                    )
                 )
-            )
             
         if not actions:
             # Simple fallback brief

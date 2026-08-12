@@ -493,10 +493,10 @@ function openEditModal(actionId) {
     const toolName = action.tool_name;
     const currentArgs = typeof action.tool_args === "string" ? JSON.parse(action.tool_args) : (action.tool_args || {});
     
-    // Inject form inputs based on the tool
     if (toolName === "draft_communication") {
-        const verifiedEmail = localStorage.getItem("verified_email") || "";
-        const emailValue = currentArgs.recipient_email || verifiedEmail;
+        const defaultEmail = localStorage.getItem("verified_email") || localStorage.getItem("smtp_user") || "";
+        const emailValue = currentArgs.recipient_email || "";
+        const placeholderText = defaultEmail ? `Default: ${defaultEmail}` : "Enter recipient email";
         editParamsForm.innerHTML = `
             <div class="form-group">
                 <label>Recipient Name:</label>
@@ -504,7 +504,7 @@ function openEditModal(actionId) {
             </div>
             <div class="form-group">
                 <label>Recipient Email:</label>
-                <input type="email" name="recipient_email" value="${emailValue}">
+                <input type="email" name="recipient_email" value="${emailValue}" placeholder="${placeholderText}">
             </div>
             <div class="form-group">
                 <label>Topic:</label>
