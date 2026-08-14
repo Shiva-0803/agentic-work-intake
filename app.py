@@ -118,9 +118,18 @@ def init_db():
         email TEXT PRIMARY KEY,
         token TEXT NOT NULL,
         verified INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        verified_at DATETIME DEFAULT NULL
     )
     """)
+    # Add verified_at column if upgrading from older schema
+    try:
+        cursor.execute("ALTER TABLE verifications ADD COLUMN verified_at DATETIME DEFAULT NULL")
+    except Exception:
+        pass  # Column already exists
+    
+    # Clear all verified sessions on startup — force fresh login every server restart
+    cursor.execute("UPDATE verifications SET verified = 0, verified_at = NULL")
     
     conn.commit()
     conn.close()
@@ -2098,7 +2107,10 @@ def api_verify_otp(req: VerifyOTPRequest):
         raise HTTPException(status_code=400, detail="No verification requested for this email.")
         
     if row["token"] == otp:
-        cursor.execute("UPDATE verifications SET verified = 1 WHERE email = ?", (email,))
+        cursor.execute(
+            "UPDATE verifications SET verified = 1, verified_at = datetime('now') WHERE email = ?",
+            (email,)
+        )
         conn.commit()
         conn.close()
         return {"success": True, "message": "Email verified successfully."}
@@ -2118,7 +2130,10 @@ def api_verify_link(email: str, token: str):
     
     success = False
     if row and row["token"] == token:
-        cursor.execute("UPDATE verifications SET verified = 1 WHERE email = ?", (email,))
+        cursor.execute(
+            "UPDATE verifications SET verified = 1, verified_at = datetime('now') WHERE email = ?",
+            (email,)
+        )
         conn.commit()
         success = True
     conn.close()
@@ -2268,13 +2283,23 @@ def api_check_auth_status(email: str):
     email = email.strip()
     conn = get_db()
     cursor = conn.cursor()
-    cursor.execute("SELECT verified FROM verifications WHERE email = ?", (email,))
+    cursor.execute("SELECT verified, verified_at FROM verifications WHERE email = ?", (email,))
     row = cursor.fetchone()
     conn.close()
     
     verified = False
     if row and row["verified"] == 1:
-        verified = True
+        # Enforce 8-hour session expiry
+        verified_at = row["verified_at"]
+        if verified_at:
+            try:
+                import datetime
+                verified_time = datetime.datetime.fromisoformat(str(verified_at))
+                elapsed = (datetime.datetime.utcnow() - verified_time).total_seconds()
+                if elapsed <= 8 * 3600:  # 8 hours
+                    verified = True
+            except Exception:
+                pass
         
     return {"verified": verified}
 
